@@ -1,2 +1,2 @@
-# IVR_Assignment
+# IVR Assignment
 Final ROS library for the Introduction to Vision and Robotics assignment.
