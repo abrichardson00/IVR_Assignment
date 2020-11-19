@@ -22,6 +22,9 @@ class joint_angles:
     time_sync.registerCallback(self.callback)
     
     self.bridge = CvBridge()
+    
+    self.joint_angles_publisher = rospy.Publisher("joint_angles", Float64MultiArray, queue_size=1)
+    
 
   def callback(self, yz_image_msg, xz_image_msg):
     try:
@@ -31,9 +34,9 @@ class joint_angles:
       yz_image_normalized = self.normalizeRGB(self.yz_image)
       xz_image_normalized = self.normalizeRGB(self.xz_image)
       
-      cv2.imshow('yz_view', yz_image_normalized)
-      cv2.imshow('xz_view', xz_image_normalized)
-      cv2.waitKey(1)
+      #cv2.imshow('yz_view', yz_image_normalized)
+      #cv2.imshow('xz_view', xz_image_normalized)
+      #cv2.waitKey(1)
       
       red_centroid_yz = self.get_joint_center(yz_image_normalized, [(0, 0, 100), (7, 7, 255)], 'red_yz', erosion=0, dilation=2)
       green_centroid_yz = self.get_joint_center(yz_image_normalized, [(0, 100, 0), (7, 255, 7)], 'green_yz', erosion=0, dilation=2)
@@ -54,6 +57,12 @@ class joint_angles:
       coordinates_3d = self.merge_plane_coordinates(centered_yz_centroids, centered_xz_centroids)
       
       self.compute_joint_angles(coordinates_3d)
+      
+      joint_angles = self.compute_joint_angles(coordinates_3d)
+      
+      joint_angles_payload = Float64MultiArray()
+      joint_angles_payload.data = joint_angles
+      self.joint_angles_publisher.publish(joint_angles_payload)
       
     except CvBridgeError as e:
       print(e)
@@ -87,7 +96,7 @@ class joint_angles:
     
     joint_angles = np.array([joint_2_angle, joint_3_angle, joint_4_angle])
     
-    print(joint_angles)
+    #print(joint_angles)
     
     return joint_angles
   
