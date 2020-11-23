@@ -23,6 +23,10 @@ class image_converter:
     self.image_sub1 = rospy.Subscriber("/camera1/robot/image_raw",Image,self.callback1)
     # initialize the bridge between openCV and ROS
     self.bridge = CvBridge()
+    
+    self.joint2_pub = rospy.Publisher("/robot/joint2_position_controller/command",Float64, queue_size = 10)
+    self.joint3_pub = rospy.Publisher("/robot/joint3_position_controller/command",Float64, queue_size = 10)
+    self.joint4_pub = rospy.Publisher("/robot/joint4_position_controller/command",Float64, queue_size = 10)
 
 
   # Recieve data from camera 1, process it, and publish
@@ -36,10 +40,29 @@ class image_converter:
     # Uncomment if you want to save the image
     #cv2.imwrite('image_copy.png', cv_image)
 
-    im1=cv2.imshow('window1', self.cv_image1)
-    cv2.waitKey(1)
+    #im1=cv2.imshow('window1', self.cv_image1)
+    #cv2.waitKey(1)
+    
+    current_time = rospy.get_time()
+    joint2 = (np.pi/2)*np.sin(np.array([(np.pi/15)*current_time]))
+    joint3 = (np.pi/2)*np.sin(np.array([(np.pi/18)*current_time]))
+    joint4 = (np.pi/2)*np.sin(np.array([(np.pi/20)*current_time]))
+    
+    joint2_payload = Float64()
+    joint2_payload.data = joint2
+    
+    joint3_payload = Float64()
+    joint3_payload.data = joint3
+    
+    joint4_payload = Float64()
+    joint4_payload.data = joint4
+    
     # Publish the results
     try: 
+      self.joint2_pub.publish(joint2_payload)
+      self.joint3_pub.publish(joint3_payload)
+      self.joint4_pub.publish(joint4_payload)
+      
       self.image_pub1.publish(self.bridge.cv2_to_imgmsg(self.cv_image1, "bgr8"))
     except CvBridgeError as e:
       print(e)
