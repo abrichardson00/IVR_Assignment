@@ -24,13 +24,20 @@ class joint_angles:
     self.bridge = CvBridge()
     
     self.joint_angles_publisher = rospy.Publisher("joint_angles", Float64MultiArray, queue_size=1)
+    #self.base_joint_location_pub = rospy.Publisher("/base_joint_location", Float64MultiArray, queue_size=1)
+    self.end_effector_location_pub = rospy.Publisher("/end_effector_location", Float64MultiArray, queue_size=1)
+    self.target_location_pub = rospy.Publisher("/target_location", Float64MultiArray, queue_size=1)
+    # initialise variables to keep track of target position on image
+    self.target_xz_centroid = np.array([0,0])
+    self.target_yz_centroid = np.array([0,0])
     
 
   def callback(self, yz_image_msg, xz_image_msg):
     try:
       self.yz_image = self.bridge.imgmsg_to_cv2(yz_image_msg, "bgr8")
       self.xz_image = self.bridge.imgmsg_to_cv2(xz_image_msg, "bgr8")
-      
+      self.image_height,self.image_width = self.yz_image.shape[:2] # <- assume yz and xz images are the same
+      #print("height, width: " + str(self.yz_image.shape))
       yz_image_normalized = self.normalizeRGB(self.yz_image)
       xz_image_normalized = self.normalizeRGB(self.xz_image)
       
@@ -55,19 +62,137 @@ class joint_angles:
       centered_xz_centroids = self.center_image_coordinates_around_first_joint(xz_centroids[0],xz_centroids[1:])
       
       coordinates_3d = self.merge_plane_coordinates(centered_yz_centroids, centered_xz_centroids)
+
       
+
       self.compute_joint_angles(coordinates_3d)
       
       joint_angles = self.compute_joint_angles(coordinates_3d)
-      
+      # publish joint angles
       joint_angles_payload = Float64MultiArray()
       joint_angles_payload.data = joint_angles
       self.joint_angles_publisher.publish(joint_angles_payload)
       
+      # find distance between yellow and blue spheres, and we know the real metre distance is 2.5m
+      yellow_to_blue_dist = np.linalg.norm(coordinates_3d[1])
+      metres_per_pixel_ratio = 2.5/yellow_to_blue_dist
+
+      #cv2.circle(self.xz_image,(int(red_centroid_xz[0]),int(red_centroid_xz[1])),5,(255,0,0),2)
+      #cv2.circle(self.yz_image,(int(red_centroid_yz[0]),int(red_centroid_yz[1])),5,(255,0,0),2)
+
+      # get and publish end effector position (red sphere position)
+      red_sphere_position = coordinates_3d[3]*metres_per_pixel_ratio
+      end_effector_payload = Float64MultiArray()
+      end_effector_payload.data = red_sphere_position
+      self.end_effector_location_pub.publish(end_effector_payload)
+
+      # get orange sphere image coords
+      self.update_target_location(yz_image_normalized,xz_image_normalized)
+      #cv2.circle(self.xz_image,(self.target_xz_centroid[0],self.target_xz_centroid[1]),5,(0,0,255),2) # display dot on our 'target location'
+      #cv2.circle(self.yz_image,(self.target_yz_centroid[0],self.target_yz_centroid[1]),5,(0,0,255),2)
+      centred_target_yz_centroid = self.center_image_coordinates_around_first_joint(yellow_centroid_yz,np.array([self.target_yz_centroid]))[1]
+      centred_target_xz_centroid = self.center_image_coordinates_around_first_joint(yellow_centroid_xz,np.array([self.target_xz_centroid]))[1]
+      target_location = self.merge_plane_coordinates([centred_target_yz_centroid],[centred_target_xz_centroid])[0]
+      target_location = target_location*metres_per_pixel_ratio
+      #print(target_location)
+      
+      # publish target location:
+      target_location_payload = Float64MultiArray()
+      target_location_payload.data = target_location
+      self.target_location_pub.publish(target_location_payload)
+
+      # uncomment if one needs to display images
+      #im1=cv2.imshow('window1', self.xz_image)
+      #im1=cv2.imshow('window2', self.yz_image)
+      #cv2.waitKey(1)
+      
     except CvBridgeError as e:
       print(e)
-  
-  
+   
+
+  def update_target_location(self,yz_image_normalized,xz_image_normalized):
+    # get orange shapes
+    # try get image location of sphere, if one cant - use previously found position
+    yz_image_coord = self.get_target_image_coord(yz_image_normalized)
+    if yz_image_coord is not None:
+      self.target_yz_centroid = yz_image_coord
+    xz_image_coord = self.get_target_image_coord(xz_image_normalized)
+    if xz_image_coord is not None:
+      self.target_xz_centroid = xz_image_coord
+    
+
+  def get_target_image_coord(self,image):
+    ### process image
+    orange_thresholds = [(0, 64, 70), (20, 100, 255)]
+    orange_image = self.threshold_and_dilate(image,orange_thresholds,2)
+
+    ### get all orange objects in image
+    contours,hierarchy = cv2.findContours(orange_image,cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)#cv2.findContours(orange_yz, 1, 2)
+    area_ratios = []
+    centres = []
+    for contour in contours:
+      contour = cv2.approxPolyDP(contour, 0.5, True)
+      #cv2.drawContours(self.xz_image, [contour], -1, (255, 0, 0), 1)
+      #print("contour: " + str(contour.shape))
+      M = cv2.moments(contour)
+      cx = int(M['m10'] / M['m00'])
+      cy = int(M['m01'] / M['m00'])
+      centres.append(np.array([cx,cy]))
+      (x,y,w,h) = cv2.boundingRect(contour)
+      
+      #cv2.rectangle(image, (x,y),(x+w,y+h),(0,255,0),1)
+      # get area of bounding box
+      bbox_area = w*h
+      # get ratio of bounding box area filled by orange shape
+      shape_area = np.sum(orange_image[y:y+h,x:x+w] * (1.0/255.0))
+      area_ratios.append(shape_area/bbox_area)
+
+      
+    ### handle each relevant case where we detect a different number of orange objects:
+    if len(contours) == 1:
+      return centres[0]
+    if len(contours) == 2: # check if one shape is definitely a circle or rectangle (if we know one we can infer the other)
+      # check if definitely a rectangle 
+      if contours[0].shape[0] == 4 or area_ratios[0] > 0.95:
+        return centres[1] # then other shape is sphere
+      if contours[1].shape[0] == 4 or area_ratios[1] > 0.95:
+        return centres[0]
+      # if we cant find definite rectangle, actually check for a circle
+      for i in range(2):
+        (x,y),r = cv2.minEnclosingCircle(contours[i])
+        min_circle_area = 3.14*r*r
+        circleness = cv2.contourArea(contours[i])/min_circle_area
+        if circleness > 0.9:
+          # definentely a circle
+          return centres[i]
+    
+    if len(contours) == 3: # one shape is definitely a sphere or rectangle - other contours come from split shape
+      is_rectangle = [False,False,False]
+      for i in range(3):
+        # check if defenently a rectangle
+        if contours[i].shape[0] == 4 or area_ratios[i] > 0.95:
+          is_rectangle[i] = True
+      if np.sum(np.array(is_rectangle))==1: # we have exactly 1 rectangle, other 2 come from obscured sphere
+        s_ind = [n for n in range(3) if not is_rectangle[n]] # <- other indices for shapes that are not rectangle
+        return ((centres[s_ind[0]][0] + centres[s_ind[1]][0])//2,(centres[s_ind[0]][1] + centres[s_ind[1]][1])//2) # return middle of 2 split sphere shapes
+      # otherwise actually check for single circle:
+      for i in range(3):
+        (x,y),r = cv2.minEnclosingCircle(contours[i])
+        min_circle_area = 3.14*r*r
+        circleness = cv2.contourArea(contours[i])/min_circle_area
+        if circleness > 0.9:
+          # definentely a circle
+          return centres[i]
+    return None
+    
+
+  def threshold_and_dilate(self,image,thresholds,iteration_num):
+    binary_image = cv2.inRange(image, thresholds[0], thresholds[1])
+    kernel = np.ones((2, 2), np.uint8)
+    dilated_image = cv2.dilate(binary_image, kernel, iterations=2)
+    return dilated_image
+
+ 
   def compute_joint_angles(self, joint_coordinates):
     blue_coordinates = joint_coordinates[1]
     green_coordinates = joint_coordinates[2]
@@ -123,12 +248,11 @@ class joint_angles:
   
   def merge_plane_coordinates(self, yz_coordinates, xz_coordinates):
     coordinates_3d = np.zeros((len(yz_coordinates),3))
-    
     for i in range(len(yz_coordinates)):
       xz = xz_coordinates[i]
       yz = yz_coordinates[i]
       
-      if(xz[0] == None):
+      if(xz[0] == None): 
         xz = self.infer_coordinates(i, xz_coordinates, yz_coordinates)
       
       elif(yz[0] == None):
