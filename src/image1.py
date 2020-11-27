@@ -59,9 +59,9 @@ class image_converter:
     
     # Publish the results
     try: 
-      #self.joint2_pub.publish(joint2_payload)
-      #self.joint3_pub.publish(joint3_payload)
-      #self.joint4_pub.publish(joint4_payload)
+      self.joint2_pub.publish(joint2_payload)
+      self.joint3_pub.publish(joint3_payload)
+      self.joint4_pub.publish(joint4_payload)
       
       self.image_pub1.publish(self.bridge.cv2_to_imgmsg(self.cv_image1, "bgr8"))
     except CvBridgeError as e:
